@@ -1,0 +1,346 @@
+--set start date as cutoff between "pre" SoR period and what follows after
+with vars as(
+select	'2023-04-01'::date as STARTDATE
+),
+q as (
+select
+	--defining pre-period SoR brands as brandstyle #s
+	unique_loyalty_id ,
+	sum(serving_quantity) servings,
+	count(distinct brand_family) brands,
+	count(distinct date_part(month, transaction_date)) scannedmonth,
+	sum(case when brand_family='NEWPORT' then serving_quantity else null end) brandstyle1,
+sum(case WHEN  brand_family like 'CAMEL%' and b.product_category='CIG'  then serving_quantity else null end) brandstyle2,
+sum(case when  brand_family like 'MARLBORO%' and b. product_category='CIG'  then  serving_quantity else null end) brandstyle3,
+sum(case when brand_family like 'LUCKY%' and  b.product_category='CIG'   then serving_quantity else null end) brandstyle4,
+sum(case when brand_family ='GRIZZLY'  then serving_quantity else null end) brandstyle5
+,sum(case when brand_family like 'VUSE%'  then serving_quantity else null end) brandstyle6
+,sum(case when brand_family like 'NATURAL AMERICAN%'  then serving_quantity else null end) brandstyle7
+,	sum(case when brand_family like '%JUUL%' then serving_quantity else null end) brandstyle8
+, sum(case when b.product_category='VAPR' and sub_category='DISPOSABLE' then serving_quantity else null end) brandstyle9
+from
+	d_rpt_falcon_v.fact_rsd a
+join d_rpt_falcon_v.product_lookup b on
+	a.brand_style_sk = b.brand_style_sk
+	join d_rpt_falcon_v.account_lookup c 
+	on a.account_sk =c.account_sk 
+where
+	account_loyalty_id is not null
+	and account_loyalty_id <> ''
+	and account_loyalty_id <> '0'
+	and account_loyalty_id not in (0, 00, 000, 0000, 00000, 00000)
+	--and a.product_category ='CIG'
+	and transaction_date >=(dateadd(month,-6,	(select	STARTDATE	from vars)))
+		and transaction_date< (select STARTDATE from vars)
+group by
+	1
+having
+	servings <= 10000
+	and servings >= 1
+	and scannedmonth >= 5),
+r as (
+select
+	--calculating exact SoR over last 12 months
+	unique_loyalty_id,
+	isnull(brandstyle1 / servings,	0) brandstyle1presor,
+	isnull(brandstyle2 / servings,	0) brandstyle2presor,
+	isnull(brandstyle3 / servings,	0) brandstyle3presor,
+	isnull(brandstyle4 / servings,	0) brandstyle4presor,
+	isnull(brandstyle5 / servings,	0) brandstyle5presor,
+	isnull(brandstyle6 / servings,	0) brandstyle6presor,
+	isnull(brandstyle7 / servings,	0) brandstyle7presor,
+	isnull(brandstyle8 / servings,	0) brandstyle8presor,
+		isnull(brandstyle9 / servings,	0) brandstyle9presor
+from
+	q
+group by
+	1
+,	2
+,	3
+,	4
+,	5
+,	6
+,	7
+,	8
+,9
+,10
+),
+--over whole period, no more than 60 servings per day average
+t as (
+select
+	unique_loyalty_id,
+	sum(serving_quantity) Servings,
+	calendar_month_description
+from
+	d_rpt_falcon_v.fact_rsd a
+join d_rpt_falcon_v.product_lookup b on
+	a.brand_style_sk = b.brand_style_sk
+join d_rpt_falcon_v.calendar_gregorian_lookup cgl 
+on
+	a.transaction_date = cgl.calendar_date
+where
+	transaction_date >= dateadd(month,
+	-12,
+	(
+	select
+		STARTDATE
+	from
+		vars))
+group by
+	1,
+	3
+having
+	isnull(Servings,0)<300 ),
+--basketing exact SoRs into ranges for each brand/style
+s as (
+select
+	unique_loyalty_id,
+	case
+		when brandstyle1presor >= 0.01
+			and brandstyle1presor<0.25 then 'a. 1-25%'
+			when brandstyle1presor >= 0.25
+			and brandstyle1presor<.5 then 'a. 26-49%'
+			when brandstyle1presor >=.50
+			and brandstyle1presor<.75 then 'a. 50-74%'
+			when brandstyle1presor >=.75 then 'a. 75%+'
+			else 'a. none'
+		end Pre_brandstyle1SoR,
+		case
+			when brandstyle2presor >= 0.01
+			and brandstyle2presor<0.25 then 'b. 1-25%'
+			when brandstyle2presor >= 0.25
+			and brandstyle2presor<.5 then 'b. 26-49%'
+			when brandstyle2presor >=.50
+			and brandstyle2presor<.75 then 'b. 50-74%'
+			when brandstyle2presor >=.75 then 'b. 75%+'
+			else 'b. none'
+		end Pre_brandstyle2SoR,
+		case
+			when brandstyle3presor >= 0.01
+			and brandstyle3presor<0.25 then 'c. 1-25%'
+			when brandstyle3presor >= 0.25
+			and brandstyle3presor<.5 then 'c. 26-49%'
+			when brandstyle3presor >=.50
+			and brandstyle3presor<.75 then 'c. 50-74%'
+			when brandstyle3presor >=.75 then 'c. 75%+'
+			else 'c. none'
+		end Pre_brandstyle3SoR,
+		case
+			when brandstyle4presor >= 0.01
+			and brandstyle4presor<0.25 then 'd. 1-25%'
+			when brandstyle4presor >= 0.25
+			and brandstyle4presor<.5 then 'd. 26-49%'
+			when brandstyle4presor >=.50
+			and brandstyle4presor<.75 then 'd. 50-74%'
+			when brandstyle4presor >=.75 then 'd. 75%+'
+			else 'd. none'
+		end Pre_brandstyle4SoR,
+		case
+			when brandstyle5presor >= 0.01
+			and brandstyle5presor<0.25 then 'e. 1-25%'
+			when brandstyle5presor >= 0.25
+			and brandstyle5presor<.5 then 'e. 26-49%'
+			when brandstyle5presor >=.50
+			and brandstyle5presor<.75 then 'e. 50-74%'
+			when brandstyle5presor >=.75 then 'e. 75%+'
+			else 'e. none'
+		end Pre_brandstyle5SoR,
+		case
+			when brandstyle6presor >= 0.01
+			and brandstyle6presor<0.25 then 'f. 1-25%'
+			when brandstyle6presor >= 0.25
+			and brandstyle6presor<.5 then 'f. 26-49%'
+			when brandstyle6presor >=.50
+			and brandstyle6presor<.75 then 'f. 50-74%'
+			when brandstyle6presor >=.75 then 'f. 75%+'
+			else 'f. none'
+		end Pre_brandstyle6SoR
+,
+		case
+			when brandstyle7presor >= 0.01
+			and brandstyle7presor<0.25 then 'g. 1-25%'
+			when brandstyle7presor >= 0.25
+			and brandstyle7presor<.5 then 'g. 26-49%'
+			when brandstyle7presor >=.50
+			and brandstyle7presor<.75 then 'g. 50-74%'
+			when brandstyle7presor >=.75 then 'g. 75%+'
+			else 'g. none'
+		end Pre_brandstyle7SoR
+		,
+				case
+			when brandstyle8presor >= 0.01
+			and brandstyle8presor<0.25 then 'h. 1-25%'
+			when brandstyle8presor >= 0.25
+			and brandstyle8presor<.5 then 'h. 26-49%'
+			when brandstyle8presor >=.50
+			and brandstyle8presor<.75 then 'h. 50-74%'
+			when brandstyle8presor >=.75 then 'h. 75%+'
+			else 'h. none'
+			end Pre_brandstyle8SoR
+			,
+			case
+			when brandstyle9presor >= 0.01
+			and brandstyle9presor<0.25 then 'i. 1-25%'
+			when brandstyle9presor >= 0.25
+			and brandstyle9presor<.5 then 'i. 26-49%'
+			when brandstyle9presor >=.50
+			and brandstyle9presor<.75 then 'i. 50-74%'
+			when brandstyle9presor >=.75 then 'i. 75%+'
+			else 'i. none'
+		end Pre_brandstyle9SoR
+	from
+		r ),
+u as (
+select
+	a.unique_loyalty_id,
+	case
+		when brand_family='NEWPORT'
+		and menthol_non_menthol='MENTHOL'
+					and serving_quantity >= 1 then '1'
+					else '0'
+		end ScannedTargetProduct
+from
+		d_rpt_falcon_v.fact_rsd a
+	join d_rpt_falcon_v.product_lookup b on
+		a.brand_style_sk = b.brand_style_sk
+	join q on
+		a.unique_loyalty_id = q.unique_loyalty_id
+	join s on
+		a.unique_loyalty_id = s.unique_loyalty_id
+	join t on
+		a.unique_loyalty_id = t.unique_loyalty_id
+		join d_rpt_falcon_v.product_lineup_ttb_brand_style_lookup d 
+		on a.brand_style_sk =d.brand_style_sk  
+	where
+		transaction_date >=dateadd(month,-2,getdate())
+			group by 1, 2
+			having ScannedTargetProduct='1')
+,
+--other additional segmentation slicers. Did they scan any of this or that in L30
+x as (select
+	a.unique_loyalty_id,
+		case when brand_family='NEWPORT'
+		and packaging='SOFT' then '1'
+		else '0' end SoftpackL30,
+		case when brand_family='MARLBORO'
+		and sub_price_level_dscription like '%VALUE%'
+		then '1' else '0' end MarlboroBrandedValueL30
+	from
+		d_rpt_falcon_v.fact_rsd a
+	join d_rpt_falcon_v.product_lookup b on
+		a.brand_style_sk = b.brand_style_sk
+	join q on
+		a.unique_loyalty_id = q.unique_loyalty_id
+	join s on
+		a.unique_loyalty_id = s.unique_loyalty_id
+	join t on
+		a.unique_loyalty_id = t.unique_loyalty_id
+		join d_rpt_falcon_v.product_lineup_ttb_brand_style_lookup d 
+		on a.brand_style_sk =d.brand_style_sk  
+	where
+		transaction_date >=dateadd(month,-1,getdate())
+			group by 1, 2,3)
+			select
+		sum(serving_quantity) Servings, NVL((serving_price/(1/nullif(serving_quantity,0)))) ServingsxPrice, 
+		count(distinct a.unique_loyalty_id) LIDs,
+	sales_month,
+	--rename brandstyle #s as brands specified in q
+	s.Pre_brandstyle1SoR as Pre_NewportSoR ,
+	s.Pre_brandstyle2SoR as Pre_CamelSoR,
+	s.Pre_brandstyle3SoR as Pre_MarlboroSoR,
+	s.Pre_brandstyle4SoR as Pre_LuckySoR,
+	s.Pre_brandstyle5SoR as Pre_GrizzlySoR,
+	s.Pre_brandstyle6SoR as Pre_VuseSoR,
+	s.Pre_brandstyle7SoR as Pre_NASSoR,
+	s.Pre_brandstyle8SoR as Pre_JUULSoR,
+	s.Pre_brandstyle9SoR as Pre_DisposableSor,
+	--identify scanners of products of interest for spotlighting
+	ScannedTargetProduct,
+	--Identify brands/styles or NPIs to follow as "post" share--
+case
+		when brand_family like 'CAMEL%' then 'Camel'
+		when brand_family = 'MARLBORO'
+		and sub_price_level_dscription like '%PREMIUM%' then 'Marlboro Premium'
+		when brand_family = 'MARLBORO' 
+		and sub_price_level_dscription like '%POPULAR%' then 'Marlboro Popular Price'
+		when brand_family = 'MARLBORO' 
+		and sub_price_level_dscription like '%VALUE%' then 'Marlboro Branded Value'
+		when brand_family = 'NEWPORT' and packaging = 'BOX' then 'Newport Box'
+		when brand_family='NEWPORT' and packaging='SOFT' then 'Newport Softpack'
+		when brand_family like '%PALL%' then 'Pall Mall'
+		when brand_family like '%LUCKY%' then 'Lucky Strike'
+		when brand_family like '%MAVERICK%' then 'Maverick'
+		when brand_family like '%KOOL%' then 'KOOL'
+		when brand_family like '%NATURAL AMERICAN%' then 'NAS'
+		when brand_family like 'VUSE%' then 'Vuse'
+		when brand_family like 'JUUL%' then 'JUUL'
+		when b.product_category = 'VAPR' and not brand_family like 'VUSE%' and not brand_family like '%JUUL%' and not sub_category = 'DISPOSABLE' then 'Other Vapor'
+		when b.product_category = 'MOIS' then 'MOIST'
+		when b.product_category = 'SNUS' then 'SNUS'
+		when b.product_category = 'NMO' then 'Modern Oral'
+		when b.product_category = 'VAPR' and sub_category = 'DISPOSABLE' then 'Disposables'
+		when b.product_category = 'CIG' then ('OTHER'+' '+sub_price_level_dscription) :: varchar
+		else b.product_category
+	end BrandStyles ,
+	case when SoftpackL30=1 then 'Softpack Scanner L30' else 'No Softpack L30' end Softpack,
+	case when MarlboroBrandedValueL30 = 1 then 'Marlboro BV L30' else 'No MLB BV L30' end MarlboroBV,
+	/*case
+		when brand_family like 'VUSE%' then 'Vuse'
+		when brand_family like 'JUUL%' then 'JUUL'
+		when b.product_category = 'VAPR' and not brand_family like 'VUSE%' and not brand_family like '%JUUL%' and not sub_category = 'DISPOSABLE' then 'Other Vapor'
+		when b.product_category = 'VAPR' and sub_category = 'DISPOSABLE' then 'Disposables'
+		when b.product_category = 'MOIS' then 'MOIST'
+		when b.product_category = 'SNUS' then 'SNUS'
+		when b.product_category = 'NMO' then 'Modern Oral'
+		when b.product_category = 'CIG' then sub_price_level_dscription
+		else b.product_category
+		end Categories,*/
+	account_state,
+	case when account_state in ('AL','GA','VA','WV','LA','MS','AR','AZ','IL','KS','KY','MD','ME','MN','NC','NM','OK','PA','SC','WI','IN','MI','MO','OH','OR','WA') then 'Marlboro Investment'
+	else 'Not major MLB Investment' end MarlboroStates,
+	case when account_state in ('AL','LA','IL','MD','MI','MO','NJ','NY','SC','FL','GA','NC','PA','TX','VA','CT','DE','MS','RI') then 'Softpack Investment' else 'Not Softpack Investment' end SoftpackStates
+from
+	d_rpt_falcon_v.fact_rsd a
+join d_rpt_falcon_v.product_lookup b on
+	a.brand_style_sk = b.brand_style_sk
+join q on
+	a.unique_loyalty_id = q.unique_loyalty_id
+join s on
+	a.unique_loyalty_id = s.unique_loyalty_id
+join d_rpt_falcon_v.calendar_sales_lookup c 
+on
+	a.sales_week_sk =c.sales_week_sk
+join t on
+	a.unique_loyalty_id = t.unique_loyalty_id
+join u on
+	a.unique_loyalty_id = u.unique_loyalty_id
+join d_rpt_falcon_v.account_lookup z on
+	a.account_sk = z.account_sk
+	join d_rpt_falcon_v.product_lineup_ttb_brand_style_lookup d 
+	on a.brand_style_sk =d.brand_style_sk 
+	left join x on a.unique_loyalty_id=x.unique_loyalty_id
+where
+	account_loyalty_id is not null
+	and account_loyalty_id <> ''
+	and account_loyalty_id <> '0'
+	and account_loyalty_id not in (0, 00, 000, 0000, 00000, 00000)
+	and account_loyalty_id_flag = 'Y'
+	and transaction_date>=dateadd(month,-18,getdate())
+group by
+2
+,4
+,	5
+,	6
+,	7
+,	8
+	, 9
+	, 10
+	, 11
+	, 12
+	, 13
+	, 14
+	,	15
+,16
+, 17
+,18
+,19
